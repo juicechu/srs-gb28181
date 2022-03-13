@@ -97,7 +97,7 @@ srs_error_t SrsGoApiRtcPlay::do_serve_http(ISrsHttpResponseWriter* w, ISrsHttpMe
     }
     if (clientip.empty()) {
         clientip = dynamic_cast<SrsHttpMessage*>(r)->connection()->remote_ip();
-        // Overwrite by ip from proxy.        
+        // Overwrite by ip from proxy.
         string oip = srs_get_original_ip(r);
         if (!oip.empty()) {
             clientip = oip;
@@ -120,7 +120,7 @@ srs_error_t SrsGoApiRtcPlay::do_serve_http(ISrsHttpResponseWriter* w, ISrsHttpMe
 
     srs_parse_rtmp_url(streamurl, ruc.req_->tcUrl, ruc.req_->stream);
 
-    srs_discovery_tc_url(ruc.req_->tcUrl, ruc.req_->schema, ruc.req_->host, ruc.req_->vhost, 
+    srs_discovery_tc_url(ruc.req_->tcUrl, ruc.req_->schema, ruc.req_->host, ruc.req_->vhost,
                          ruc.req_->app, ruc.req_->stream, ruc.req_->port, ruc.req_->param);
 
     // discovery vhost, resolve the vhost from config
@@ -207,6 +207,7 @@ srs_error_t SrsGoApiRtcPlay::do_serve_http(ISrsHttpResponseWriter* w, ISrsHttpMe
 
     res->set("sdp", SrsJsonAny::str(local_sdp_str.c_str()));
     res->set("sessionid", SrsJsonAny::str(session->username().c_str()));
+    res->set("id", SrsJsonAny::str(_srs_context->get_id().c_str()));
 
     srs_trace("RTC username=%s, dtls=%u, srtp=%u, offer=%dB, answer=%dB", session->username().c_str(),
         ruc.dtls_, ruc.srtp_, remote_sdp_str.length(), local_sdp_escaped.length());
@@ -378,7 +379,7 @@ srs_error_t SrsGoApiRtcPublish::do_serve_http(ISrsHttpResponseWriter* w, ISrsHtt
 
     srs_parse_rtmp_url(streamurl, ruc.req_->tcUrl, ruc.req_->stream);
 
-    srs_discovery_tc_url(ruc.req_->tcUrl, ruc.req_->schema, ruc.req_->host, ruc.req_->vhost, 
+    srs_discovery_tc_url(ruc.req_->tcUrl, ruc.req_->schema, ruc.req_->host, ruc.req_->vhost,
                          ruc.req_->app, ruc.req_->stream, ruc.req_->port, ruc.req_->param);
 
     // discovery vhost, resolve the vhost from config
