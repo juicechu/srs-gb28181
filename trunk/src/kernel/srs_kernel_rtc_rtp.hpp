@@ -44,6 +44,12 @@ class SrsRtpFUAPayload2;
 class SrsSharedPtrMessage;
 class SrsRtpExtensionTypes;
 
+#ifdef SRS_H265
+const uint8_t HEVC_kFuA         = 49;
+const uint8_t HEVC_kStapA       = 48;
+const uint8_t HEVC_kNalTypeMask = 0x7E;
+#endif
+
 // Fast parse the SSRC from RTP packet. Return 0 if invalid.
 uint32_t srs_rtp_fast_parse_ssrc(char* buf, int size);
 uint8_t srs_rtp_fast_parse_pt(char* buf, int size);
@@ -452,4 +458,53 @@ public:
     virtual ISrsRtpPayloader* copy();
 };
 
+#ifdef SRS_H265
+// STAP-A, for multiple NALUs.
+class SrsRtpHevcSTAPPayload : public ISrsRtpPayloader
+{
+public:
+    // The NRI in NALU type.
+    SrsAvcNaluType nri;
+    // The NALU samples, we will manage the samples.
+    // @remark We only refer to the memory, user must free its bytes.
+    std::vector<SrsSample*> nalus;
+public:
+    SrsRtpHevcSTAPPayload();
+    virtual ~SrsRtpHevcSTAPPayload();
+public:
+    SrsSample* get_sps();
+    SrsSample* get_pps();
+// interface ISrsRtpPayloader
+public:
+    virtual uint64_t nb_bytes();
+    virtual srs_error_t encode(SrsBuffer* buf);
+    virtual srs_error_t decode(SrsBuffer* buf);
+    virtual ISrsRtpPayloader* copy();
+};
+
+// FU-A, for one NALU with multiple fragments.
+// With only one payload.
+class SrsRtpHevcFUAPayload2 : public ISrsRtpPayloader
+{
+public:
+    // The NRI in NALU type.
+    SrsAvcNaluType nri;
+    // The FUA header.
+    bool start;
+    bool end;
+    SrsAvcNaluType nalu_type;
+    // The payload and size,
+    char* payload;
+    int size;
+public:
+    SrsRtpHevcFUAPayload2();
+    virtual ~SrsRtpHevcFUAPayload2();
+// interface ISrsRtpPayloader
+public:
+    virtual uint64_t nb_bytes();
+    virtual srs_error_t encode(SrsBuffer* buf);
+    virtual srs_error_t decode(SrsBuffer* buf);
+    virtual ISrsRtpPayloader* copy();
+};
+#endif
 #endif

@@ -877,7 +877,7 @@ private:
     srs_error_t  (SrsFormat::*demux_ibmf_format_func)(SrsBuffer* stream);
 
 #ifdef SRS_H265
-private:
+public:
     // Parse the hevc vps/sps/pps
     virtual srs_error_t hevc_demux_hvcc(SrsBuffer* stream);
     virtual srs_error_t hevc_demux_ibmf_format(SrsBuffer* stream);

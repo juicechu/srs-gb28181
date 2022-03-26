@@ -130,6 +130,7 @@ public:
     const std::map<int, std::string>& get_extmaps() const { return extmaps_; }
     srs_error_t update_msid(std::string id);
 
+    bool find_encoding_name(const std::string& encoding_name) const;
     bool is_audio() const { return type_ == "audio"; }
     bool is_video() const { return type_ == "video"; }
 private:

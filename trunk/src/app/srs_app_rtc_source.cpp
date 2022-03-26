@@ -58,6 +58,7 @@ const int kAudioSamplerate      = 48000;
 
 // Firefox defaults as 126, Chrome is 102.
 const int kVideoPayloadType = 102;
+const int kHevcPayloadType = 126;
 const int kVideoSamplerate  = 90000;
 
 // The RTP payload max size, reserved some paddings for SRTP as such:
@@ -401,7 +402,7 @@ void SrsRtcSource::init_for_play_before_publishing()
         video_track_desc->ssrc_ = video_ssrc;
         video_track_desc->direction_ = "recvonly";
 
-        SrsVideoPayload* video_payload = new SrsVideoPayload(kVideoPayloadType, "H264", kVideoSamplerate);
+        SrsVideoPayload* video_payload = new SrsVideoPayload(kHevcPayloadType, "H265", kVideoSamplerate);
         video_track_desc->media_ = video_payload;
 
         video_payload->set_h264_param_desc("level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f");
@@ -670,7 +671,12 @@ std::vector<SrsRtcTrackDescription*> SrsRtcSource::get_track_desc(std::string ty
     if (type == "video") {
         std::vector<SrsRtcTrackDescription*>::iterator it = stream_desc_->video_track_descs_.begin();
         while (it != stream_desc_->video_track_descs_.end() ){
+            if (media_name == "" || (*it)->media_->name_ == media_name) {
             track_descs.push_back(*it);
+                if (media_name != "") {
+                    break;
+                }
+            }
             ++it;
         }
     }
@@ -730,6 +736,13 @@ SrsRtcFromRtmpBridger::SrsRtcFromRtmpBridger(SrsRtcSource* source)
         std::vector<SrsRtcTrackDescription*> descs = source->get_track_desc("video", "H264");
         if (!descs.empty()) {
             video_ssrc = descs.at(0)->ssrc_;
+        } else {
+#ifdef SRS_H265
+            std::vector<SrsRtcTrackDescription*> descs = source->get_track_desc("video", "H265");
+            if (!descs.empty()) {
+                video_ssrc = descs.at(0)->ssrc_;
+            }
+#endif
         }
     }
 }
@@ -948,14 +961,26 @@ srs_error_t SrsRtcFromRtmpBridger::on_video(SrsSharedPtrMessage* msg)
         return srs_error_wrap(err, "filter video");
     }
     int nn_samples = (int)samples.size();
+    bool is_hevc = false;
+#ifdef SRS_H265
+    if (format->vcodec->id == SrsVideoCodecIdHEVC) {
+        is_hevc = true;
+    }
+#endif
 
     // Well, for each IDR, we append a SPS/PPS before it, which is packaged in STAP-A.
     if (has_idr) {
         SrsRtpPacket* pkt = new SrsRtpPacket();
         SrsAutoFree(SrsRtpPacket, pkt);
 
+        if (is_hevc) {
+            if ((err = package_hevc_stap_a(source_, msg, pkt)) != srs_success) {
+                return srs_error_wrap(err, "package stap-a");
+            }
+        } else {
         if ((err = package_stap_a(source_, msg, pkt)) != srs_success) {
             return srs_error_wrap(err, "package stap-a");
+        }
         }
 
         if ((err = source_->on_rtp(pkt)) != srs_success) {
@@ -981,15 +1006,23 @@ srs_error_t SrsRtcFromRtmpBridger::on_video(SrsSharedPtrMessage* msg)
             }
 
             if (sample->size <= kRtpMaxPayloadSize) {
+                //single nalu is same between hevc and h264
                 if ((err = package_single_nalu(msg, sample, pkts)) != srs_success) {
                     return srs_error_wrap(err, "package single nalu");
                 }
+            } else {
+                if (is_hevc) {
+                    if ((err = package_hevc_fu_a(msg, sample, kRtpMaxPayloadSize, pkts)) != srs_success) {
+                        return srs_error_wrap(err, "package fu-a");
+                    }
+
             } else {
                 if ((err = package_fu_a(msg, sample, kRtpMaxPayloadSize, pkts)) != srs_success) {
                     return srs_error_wrap(err, "package fu-a");
                 }
             }
         }
+    }
     }
 
     if (!pkts.empty()) {
@@ -1188,10 +1221,20 @@ srs_error_t SrsRtcFromRtmpBridger::package_single_nalu(SrsSharedPtrMessage* msg,
 {
     srs_error_t err = srs_success;
 
+    SrsFormat* format = meta->vsh_format();
+    if (!format || !format->vcodec) {
+        return err;
+    }
+
     SrsRtpPacket* pkt = new SrsRtpPacket();
     pkts.push_back(pkt);
 
     pkt->header.set_payload_type(kVideoPayloadType);
+#ifdef SRS_H265
+    if (format->vcodec->id == SrsVideoCodecIdHEVC) {
+        pkt->header.set_payload_type(kHevcPayloadType);
+    }
+#endif
     pkt->header.set_ssrc(video_ssrc);
     pkt->frame_type = SrsFrameTypeVideo;
     pkt->header.set_sequence(video_sequence++);
@@ -1249,6 +1292,120 @@ srs_error_t SrsRtcFromRtmpBridger::package_fu_a(SrsSharedPtrMessage* msg, SrsSam
 
     return err;
 }
+
+#ifdef SRS_H265
+srs_error_t SrsRtcFromRtmpBridger::package_hevc_stap_a(SrsRtcSource* source, SrsSharedPtrMessage* msg, SrsRtpPacket* pkt)
+{
+    srs_error_t err = srs_success;
+
+    SrsFormat* format = meta->vsh_format();
+    if (!format || !format->vcodec) {
+        return err;
+    }
+    pkt->header.set_ssrc(video_ssrc);
+    pkt->frame_type = SrsFrameTypeVideo;
+    pkt->nalu_type = (SrsAvcNaluType)HEVC_kStapA;
+    pkt->header.set_marker(false);
+    pkt->header.set_sequence(video_sequence++);
+    pkt->header.set_timestamp(msg->timestamp * 90);
+
+    SrsRtpHevcSTAPPayload* stap = new SrsRtpHevcSTAPPayload();
+    pkt->set_payload(stap, SrsRtspPacketPayloadTypeSTAP);
+
+    char* vpsData;
+    int vpsSize;
+    if (format->hevc_vps_data(vpsData, vpsSize) != srs_success) {
+        return srs_error_new(ERROR_RTC_RTP_MUXER, "vps error");
+    }
+    char* spsData;
+    int spsSize;
+    if (format->hevc_sps_data(spsData, spsSize) != srs_success) {
+        return srs_error_new(ERROR_RTC_RTP_MUXER, "sps error");
+    }
+    char* ppsData;
+    int ppsSize;
+    if (format->hevc_pps_data(ppsData, ppsSize) != srs_success) {
+        return srs_error_new(ERROR_RTC_RTP_MUXER, "sps error");
+    }
+    uint8_t header = spsData[0];
+    stap->nri = (SrsAvcNaluType)header;
+    // Copy the VPS/SPS/PPS bytes, because it may change.
+    int size = (int)(vpsSize + spsSize + ppsSize);
+    char* payload = pkt->wrap(size);
+
+    if (true) {
+        SrsSample* sample = new SrsSample();
+        sample->bytes = payload;
+        sample->size = vpsSize;
+        stap->nalus.push_back(sample);
+
+        memcpy(payload, (char*)&vpsData[0], vpsSize);
+        payload += vpsSize;
+    }
+    if (true) {
+        SrsSample* sample = new SrsSample();
+        sample->bytes = payload;
+        sample->size = spsSize;
+        stap->nalus.push_back(sample);
+
+        memcpy(payload, (char*)&spsData[0], spsSize);
+        payload += spsSize;
+    }
+    if (true) {
+        SrsSample* sample = new SrsSample();
+        sample->bytes = payload;
+        sample->size = ppsSize;
+        stap->nalus.push_back(sample);
+
+        memcpy(payload, (char*)&ppsData[0], ppsSize);
+        payload += ppsSize;
+    }
+    srs_trace("RTC STAP-A seq=%u, vps %d, sps %d, pps %d bytes", pkt->header.get_sequence(), vpsSize, spsSize, ppsSize);
+    return err;
+}
+
+srs_error_t SrsRtcFromRtmpBridger::package_hevc_fu_a(SrsSharedPtrMessage* msg, SrsSample* sample, int fu_payload_size, vector<SrsRtpPacket*>& pkts)
+{
+    srs_error_t err = srs_success;
+
+    char* p = sample->bytes + 2;
+    int nb_left = sample->size - 2;
+    uint8_t header = sample->bytes[0];
+    uint8_t nal_type = (header & HEVC_kNalTypeMask)>>1;
+
+    int num_of_packet = 1 + (nb_left - 1) / fu_payload_size;
+    for (int i = 0; i < num_of_packet; ++i) {
+        int packet_size = srs_min(nb_left, fu_payload_size);
+
+        SrsRtpPacket* pkt = new SrsRtpPacket();
+        pkts.push_back(pkt);
+
+        pkt->header.set_payload_type(kHevcPayloadType);
+        pkt->header.set_ssrc(video_ssrc);
+        pkt->frame_type = SrsFrameTypeVideo;
+        pkt->header.set_sequence(video_sequence++);
+        pkt->header.set_timestamp(msg->timestamp * 90);
+
+        SrsRtpHevcFUAPayload2* fua = new SrsRtpHevcFUAPayload2();
+        pkt->set_payload(fua, SrsRtspPacketPayloadTypeFUA2);
+
+        fua->nri = (SrsAvcNaluType)header;
+        fua->nalu_type = (SrsAvcNaluType)nal_type;
+        fua->start = bool(i == 0);
+        fua->end = bool(i == num_of_packet - 1);
+
+        fua->payload = p;
+        fua->size = packet_size;
+
+        pkt->wrap(msg);
+
+        p += packet_size;
+        nb_left -= packet_size;
+    }
+
+    return err;
+}
+#endif
 
 srs_error_t SrsRtcFromRtmpBridger::consume_packets(vector<SrsRtpPacket*>& pkts)
 {

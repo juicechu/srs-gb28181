@@ -1446,7 +1446,7 @@ uint64_t SrsRtpFUAPayload2::nb_bytes()
 srs_error_t SrsRtpFUAPayload2::encode(SrsBuffer* buf)
 {
     if (!buf->require(2 + size)) {
-        return srs_error_new(ERROR_RTC_RTP_MUXER, "requires %d bytes", 1);
+        return srs_error_new(ERROR_RTC_RTP_MUXER, "requires %d bytes", 2);
     }
 
     // Fast encoding.
@@ -1516,3 +1516,252 @@ ISrsRtpPayloader* SrsRtpFUAPayload2::copy()
 
     return cp;
 }
+
+#ifdef SRS_H265
+
+SrsRtpHevcSTAPPayload::SrsRtpHevcSTAPPayload()
+{
+    nri = (SrsAvcNaluType)0;
+
+    ++_srs_pps_objs_rothers->sugar;
+}
+
+SrsRtpHevcSTAPPayload::~SrsRtpHevcSTAPPayload()
+{
+    int nn_nalus = (int)nalus.size();
+    for (int i = 0; i < nn_nalus; i++) {
+        SrsSample* p = nalus[i];
+        srs_freep(p);
+    }
+}
+
+SrsSample* SrsRtpHevcSTAPPayload::get_sps()
+{
+    int nn_nalus = (int)nalus.size();
+    for (int i = 0; i < nn_nalus; i++) {
+        SrsSample* p = nalus[i];
+        if (!p || !p->size) {
+            continue;
+        }
+
+        SrsAvcNaluType nalu_type = (SrsAvcNaluType)(p->bytes[0] & kNalTypeMask);
+        if (nalu_type == SrsAvcNaluTypeSPS) {
+            return p;
+        }
+    }
+
+    return NULL;
+}
+
+SrsSample* SrsRtpHevcSTAPPayload::get_pps()
+{
+    int nn_nalus = (int)nalus.size();
+    for (int i = 0; i < nn_nalus; i++) {
+        SrsSample* p = nalus[i];
+        if (!p || !p->size) {
+            continue;
+        }
+
+        SrsAvcNaluType nalu_type = (SrsAvcNaluType)(p->bytes[0] & kNalTypeMask);
+        if (nalu_type == SrsAvcNaluTypePPS) {
+            return p;
+        }
+    }
+
+    return NULL;
+}
+
+uint64_t SrsRtpHevcSTAPPayload::nb_bytes()
+{
+    int size = 1;
+
+    int nn_nalus = (int)nalus.size();
+    for (int i = 0; i < nn_nalus; i++) {
+        SrsSample* p = nalus[i];
+        size += 2 + p->size;
+    }
+
+    return size;
+}
+
+srs_error_t SrsRtpHevcSTAPPayload::encode(SrsBuffer* buf)
+{
+    if (!buf->require(2)) {
+        return srs_error_new(ERROR_RTC_RTP_MUXER, "requires %d bytes", 2);
+    }
+
+    // STAP header, RTP payload format for aggregation packets
+    // @see https://tools.ietf.org/html/rfc6184#section-5.7
+    //uint8_t v = kStapA;
+    //v |= (nri & (~kNalTypeMask));
+    buf->write_1bytes(HEVC_kStapA << 1);
+    buf->write_1bytes(1);
+
+    // NALUs.
+    int nn_nalus = (int)nalus.size();
+    for (int i = 0; i < nn_nalus; i++) {
+        SrsSample* p = nalus[i];
+
+        if (!buf->require(2 + p->size)) {
+            return srs_error_new(ERROR_RTC_RTP_MUXER, "requires %d bytes", 2 + p->size);
+        }
+
+        buf->write_2bytes(p->size);
+        buf->write_bytes(p->bytes, p->size);
+    }
+
+    return srs_success;
+}
+
+srs_error_t SrsRtpHevcSTAPPayload::decode(SrsBuffer* buf)
+{
+    if (!buf->require(1)) {
+        return srs_error_new(ERROR_RTC_RTP_MUXER, "requires %d bytes", 1);
+    }
+
+    // STAP header, RTP payload format for aggregation packets
+    // @see https://tools.ietf.org/html/rfc6184#section-5.7
+    uint8_t v = buf->read_1bytes();
+
+    // forbidden_zero_bit shoul be zero.
+    // @see https://tools.ietf.org/html/rfc6184#section-5.3
+    uint8_t f = (v & 0x80);
+    if (f == 0x80) {
+        return srs_error_new(ERROR_RTC_RTP_MUXER, "forbidden_zero_bit should be zero");
+    }
+
+    nri = SrsAvcNaluType(v & (~kNalTypeMask));
+
+    // NALUs.
+    while (!buf->empty()) {
+        if (!buf->require(2)) {
+            return srs_error_new(ERROR_RTC_RTP_MUXER, "requires %d bytes", 2);
+        }
+
+        int size = buf->read_2bytes();
+        if (!buf->require(size)) {
+            return srs_error_new(ERROR_RTC_RTP_MUXER, "requires %d bytes", size);
+        }
+
+        SrsSample* sample = new SrsSample();
+        sample->bytes = buf->head();
+        sample->size = size;
+        buf->skip(size);
+
+        nalus.push_back(sample);
+    }
+
+    return srs_success;
+}
+
+ISrsRtpPayloader* SrsRtpHevcSTAPPayload::copy()
+{
+    SrsRtpHevcSTAPPayload* cp = new SrsRtpHevcSTAPPayload();
+
+    cp->nri = nri;
+
+    int nn_nalus = (int)nalus.size();
+    for (int i = 0; i < nn_nalus; i++) {
+        SrsSample* p = nalus[i];
+        cp->nalus.push_back(p->copy());
+    }
+
+    return cp;
+}
+
+SrsRtpHevcFUAPayload2::SrsRtpHevcFUAPayload2()
+{
+    start = end = false;
+    nri = nalu_type = (SrsAvcNaluType)0;
+
+    payload = NULL;
+    size = 0;
+
+    ++_srs_pps_objs_rfua->sugar;
+}
+
+SrsRtpHevcFUAPayload2::~SrsRtpHevcFUAPayload2()
+{
+}
+
+uint64_t SrsRtpHevcFUAPayload2::nb_bytes()
+{
+    return 3 + size;
+}
+
+srs_error_t SrsRtpHevcFUAPayload2::encode(SrsBuffer* buf)
+{
+    if (!buf->require(3 + size)) {
+        return srs_error_new(ERROR_RTC_RTP_MUXER, "requires %d bytes", 1);
+    }
+
+    // Fast encoding.
+    char* p = buf->head();
+
+    // FU indicator, @see https://tools.ietf.org/html/rfc6184#section-5.8
+    //uint8_t fu_indicate = kFuA;
+    //fu_indicate |= (nri & (~kNalTypeMask));
+    *p++ = HEVC_kFuA << 1;
+	*p++=1;
+
+    // FU header, @see https://tools.ietf.org/html/rfc6184#section-5.8
+    uint8_t fu_header = nalu_type;
+    if (start) {
+        fu_header |= kStart;
+    }
+    if (end) {
+        fu_header |= kEnd;
+    }
+    *p++ = fu_header;
+
+    // FU payload, @see https://tools.ietf.org/html/rfc6184#section-5.8
+    memcpy(p, payload, size);
+
+    // Consume bytes.
+    //buf->skip(2 + size);
+    buf->skip(3 + size);
+
+    return srs_success;
+}
+
+srs_error_t SrsRtpHevcFUAPayload2::decode(SrsBuffer* buf)
+{
+    if (!buf->require(2)) {
+        return srs_error_new(ERROR_RTC_RTP_MUXER, "requires %d bytes", 2);
+    }
+
+    // FU indicator, @see https://tools.ietf.org/html/rfc6184#section-5.8
+    uint8_t v = buf->read_1bytes();
+    nri = SrsAvcNaluType(v & (~kNalTypeMask));
+
+    // FU header, @see https://tools.ietf.org/html/rfc6184#section-5.8
+    v = buf->read_1bytes();
+    start = v & kStart;
+    end = v & kEnd;
+    nalu_type = SrsAvcNaluType(v & kNalTypeMask);
+
+    if (!buf->require(1)) {
+        return srs_error_new(ERROR_RTC_RTP_MUXER, "requires %d bytes", 1);
+    }
+
+    payload = buf->head();
+    size = buf->left();
+    buf->skip(size);
+
+    return srs_success;
+}
+
+ISrsRtpPayloader* SrsRtpHevcFUAPayload2::copy()
+{
+    SrsRtpHevcFUAPayload2* cp = new SrsRtpHevcFUAPayload2();
+
+    cp->nri = nri;
+    cp->start = start;
+    cp->end = end;
+    cp->nalu_type = nalu_type;
+    cp->payload = payload;
+    cp->size = size;
+
+    return cp;
+}
+#endif

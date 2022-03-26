@@ -281,6 +281,10 @@ private:
     srs_error_t package_nalus(SrsSharedPtrMessage* msg, const std::vector<SrsSample*>& samples, std::vector<SrsRtpPacket*>& pkts);
     srs_error_t package_single_nalu(SrsSharedPtrMessage* msg, SrsSample* sample, std::vector<SrsRtpPacket*>& pkts);
     srs_error_t package_fu_a(SrsSharedPtrMessage* msg, SrsSample* sample, int fu_payload_size, std::vector<SrsRtpPacket*>& pkts);
+#ifdef SRS_H265
+    srs_error_t package_hevc_stap_a(SrsRtcSource* source, SrsSharedPtrMessage* msg, SrsRtpPacket* pkt);
+    srs_error_t package_hevc_fu_a(SrsSharedPtrMessage* msg, SrsSample* sample, int fu_payload_size, std::vector<SrsRtpPacket*>& pkts);
+#endif
     srs_error_t consume_packets(std::vector<SrsRtpPacket*>& pkts);
 };
 

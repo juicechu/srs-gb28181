@@ -307,6 +307,22 @@ SrsMediaPayloadType* SrsMediaDesc::find_media_with_payload_type(int payload_type
     return NULL;
 }
 
+bool SrsMediaDesc::find_encoding_name(const std::string& encoding_name) const{
+
+    std::string lower_name(encoding_name), upper_name(encoding_name);
+    transform(encoding_name.begin(), encoding_name.end(), lower_name.begin(), ::tolower);
+    transform(encoding_name.begin(), encoding_name.end(), upper_name.begin(), ::toupper);
+
+    for (size_t i = 0; i < payload_types_.size(); ++i) {
+        if (payload_types_[i].encoding_name_ == std::string(lower_name.c_str()) ||
+               payload_types_[i].encoding_name_ == std::string(upper_name.c_str())) {
+           return true;
+        }
+    }
+
+	return false;
+}
+
 vector<SrsMediaPayloadType> SrsMediaDesc::find_media_with_encoding_name(const std::string& encoding_name) const
 {
     std::vector<SrsMediaPayloadType> payloads;
